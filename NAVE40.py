@@ -32,7 +32,7 @@ st.set_page_config(
 # LINK DA SUA PLANILHA NO GOOGLE SHEETS
 # --------------------------------------------------------------------------
 URL_PLANILHA = (
-    "https://docs.google.com/spreadsheets/d/Caronas_Nave40/edit"
+    "https://docs.google.com/spreadsheets/d/1-NQnc7jpcGQ1g0RTu76XXj3h08NhU5QGmxoy_tT3QZk/edit"
 )
 
 # CONEXÃO COM O GOOGLE SHEETS (sem o argumento 'spreadsheet' aqui)
