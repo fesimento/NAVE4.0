@@ -28,14 +28,15 @@ st.set_page_config(
 # --------------------------------------------------------------------------
 # LINK DA SUA PLANILHA NO GOOGLE SHEETS
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# LINK DA SUA PLANILHA NO GOOGLE SHEETS
+# --------------------------------------------------------------------------
 URL_PLANILHA = (
-    "https://docs.google.com/spreadsheets/d/1-NQnc7jpcGQ1g0RTu76XXj3h08NhU5QGmxoy_tT3QZk/edit?usp=sharing"
+    "https://docs.google.com/spreadsheets/d/Caronas_Nave40/edit"
 )
 
-# CONEXÃO COM O GOOGLE SHEETS
-conn = st.connection(
-    "gsheets", type=GSheetsConnection, spreadsheet=URL_PLANILHA
-)
+# CONEXÃO COM O GOOGLE SHEETS (sem o argumento 'spreadsheet' aqui)
+conn = st.connection("gsheets", type=GSheetsConnection)
 
 
 def carregar_viagens():
