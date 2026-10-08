@@ -1,9 +1,20 @@
 import calendar
 from datetime import datetime
-import sqlite3
-import holidays
+import subprocess
+import sys
+
+# Garante a instalação/importação do pacote holidays
+try:
+    import holidays
+except ImportError:
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "holidays"]
+    )
+    import holidays
+
 import pandas as pd
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 
 # --------------------------------------------------------------------------
 # CONFIGURAÇÃO DA PÁGINA
@@ -15,59 +26,23 @@ st.set_page_config(
 )
 
 # --------------------------------------------------------------------------
-# CONEXÃO COM BANCO DE DADOS LOCAL (SQLite)
+# CONEXÃO COM O GOOGLE SHEETS
 # --------------------------------------------------------------------------
-CONN = sqlite3.connect("caronas.db", check_same_thread=False)
-CURSOR = CONN.cursor()
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Tabela de Viagens
-CURSOR.execute("""
-CREATE TABLE IF NOT EXISTS viagens (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    data DATE,
-    motorista TEXT,
-    status TEXT DEFAULT 'Aprovada'
-)
-""")
 
-# Tabela de Parâmetros e Custos Fixos
-CURSOR.execute("""
-CREATE TABLE IF NOT EXISTS parametros (
-    id INTEGER PRIMARY KEY,
-    valor_veiculo REAL,
-    distancia_dia REAL,
-    consumo_kml REAL,
-    valor_combustivel REAL,
-    pedagio_dia REAL,
-    oleo_valor REAL,
-    oleo_km REAL,
-    pneus_valor REAL,
-    pneus_km REAL,
-    depreciacao_pct REAL,
-    ipva_pct REAL,
-    seguro_ano REAL
-)
-""")
+def carregar_viagens():
+    return conn.read(worksheet="viagens", ttl="0")
 
-# Inserir parâmetros iniciais caso a tabela esteja vazia
-CURSOR.execute("SELECT COUNT(*) FROM parametros")
-if CURSOR.fetchone()[0] == 0:
-    CURSOR.execute("""
-        INSERT INTO parametros VALUES (
-            1, 60000.0, 160.0, 13.0, 6.0, 49.40,
-            250.0, 1000.0, 2000.0, 50000.0,
-            5.0, 4.0, 2000.0
-        )
-    """)
-CONN.commit()
 
-# Lista de Navegantes
+def carregar_parametros():
+    df_p = conn.read(worksheet="parametros", ttl="0")
+    return df_p.iloc[0]
+
+
 INTEGRANTES = ["Rogério", "Jonatas", "Gustavo", "Felipe", "Edgar"]
 
 
-# --------------------------------------------------------------------------
-# FUNÇÃO AUXILIAR: PERÍODO DE FECHAMENTO (Dia 15 anterior ao dia 14 atual)
-# --------------------------------------------------------------------------
 def get_datas_fechamento(ano, mes):
     if mes == 1:
         data_inicio = pd.Timestamp(year=ano - 1, month=12, day=15)
@@ -79,14 +54,14 @@ def get_datas_fechamento(ano, mes):
 
 
 # --------------------------------------------------------------------------
-# SIDEBAR: MENU DE NAVEGAÇÃO
+# SIDEBAR: MENU PRINCIPAL
 # --------------------------------------------------------------------------
 st.sidebar.title("🚗 Nave 40")
 menu = st.sidebar.radio(
     "Menu Principais",
     [
-        "➕ Lançar Viagem",
         "📅 Calendário e Dashboard",
+        "➕ Lançar Viagem",
         "⚠️ Aprovação de Duplicadas",
         "⚙️ Configurações / Custos Fixos",
     ],
@@ -102,23 +77,21 @@ if menu == "➕ Lançar Viagem":
     data_viagem = st.date_input("Data da viagem", value=datetime.today())
     data_str = data_viagem.strftime("%Y-%m-%d")
 
-    # Verificar existência de viagem na mesma data
-    CURSOR.execute(
-        "SELECT motorista, status FROM viagens WHERE data = ?", (data_str,)
-    )
-    existentes = CURSOR.fetchall()
+    df_viagens = carregar_viagens()
 
-    if existentes:
-        motoristas_existentes = [
-            m[0] for m in existentes if m[1] != "Rejeitada"
-        ]
-        if motoristas_existentes:
-            st.warning(
-                f"⚠️ **Atenção:** Já existe viagem registrada para essa data ({data_viagem.strftime('%d/%m/%Y')}) por: **{', '.join(motoristas_existentes)}**!"
-            )
-            st.info(
-                "Se você confirmar o envio, o lançamento irá para a **Aba de Aprovação de Duplicadas**."
-            )
+    # Verificar viagens existentes na data selecionada
+    existentes = df_viagens[
+        (df_viagens["data"] == data_str) & (df_viagens["status"] != "Rejeitada")
+    ]
+
+    if not existentes.empty:
+        motoristas_existentes = existentes["motorista"].tolist()
+        st.warning(
+            f"⚠️ **Atenção:** Já existe viagem registrada para essa data ({data_viagem.strftime('%d/%m/%Y')}) por: **{', '.join(motoristas_existentes)}**!"
+        )
+        st.info(
+            "Se você confirmar o envio, o lançamento irá para a **Aba de Aprovação de Duplicadas**."
+        )
 
     with st.form("form_viagem", clear_on_submit=True):
         motorista = st.selectbox("Motorista (Navegante)", INTEGRANTES)
@@ -126,22 +99,35 @@ if menu == "➕ Lançar Viagem":
 
         if submetido:
             status_inicial = (
-                "Pendente (Duplicada)" if existentes else "Aprovada"
+                "Pendente (Duplicada)" if not existentes.empty else "Aprovada"
+            )
+            novo_id = (
+                int(df_viagens["id"].max()) + 1 if not df_viagens.empty else 1
             )
 
-            CURSOR.execute(
-                "INSERT INTO viagens (data, motorista, status) VALUES (?, ?, ?)",
-                (data_str, motorista, status_inicial),
+            nova_linha = pd.DataFrame(
+                [
+                    {
+                        "id": novo_id,
+                        "data": data_str,
+                        "motorista": motorista,
+                        "status": status_inicial,
+                    }
+                ]
             )
-            CONN.commit()
+
+            df_atualizado = pd.concat(
+                [df_viagens, nova_linha], ignore_index=True
+            )
+            conn.update(worksheet="viagens", data=df_atualizado)
 
             if status_inicial == "Aprovada":
                 st.success(
-                    f"✅ Viagem de **{motorista}** registrada com sucesso!"
+                    f"✅ Viagem de **{motorista}** gravada com sucesso no Google Sheets!"
                 )
             else:
                 st.warning(
-                    f"⚠️ Viagem registrada como pendente! Acesse a aba **Aprovação de Duplicadas** para resolver a duplicidade."
+                    f"⚠️ Viagem pendente gravada no Google Sheets! Acesse a aba **Aprovação de Duplicadas**."
                 )
 
 
@@ -154,14 +140,15 @@ elif menu == "⚠️ Aprovação de Duplicadas":
         "Analise e regularize lançamentos duplicados ou pendentes de confirmação."
     )
 
-    df_duplicadas = pd.read_sql_query(
-        """
-        SELECT * FROM viagens 
-        WHERE status = 'Pendente (Duplicada)' 
-        OR data IN (SELECT data FROM viagens GROUP BY data HAVING COUNT(*) > 1)
-    """,
-        CONN,
-    )
+    df_viagens = carregar_viagens()
+
+    duplicadas_datas = df_viagens[
+        df_viagens.duplicated(subset=["data"], keep=False)
+    ]["data"].unique()
+    df_duplicadas = df_viagens[
+        (df_viagens["status"] == "Pendente (Duplicada)")
+        | (df_viagens["data"].isin(duplicadas_datas))
+    ]
 
     if df_duplicadas.empty:
         st.success("🎉 Nenhuma viagem duplicada encontrada!")
@@ -177,18 +164,15 @@ elif menu == "⚠️ Aprovação de Duplicadas":
                 btn_excluir = st.button("Excluir", key=f"del_{row['id']}")
 
                 if btn_aprovar:
-                    CURSOR.execute(
-                        "UPDATE viagens SET status = 'Aprovada' WHERE id = ?",
-                        (row["id"],),
-                    )
-                    CONN.commit()
+                    df_viagens.loc[
+                        df_viagens["id"] == row["id"], "status"
+                    ] = "Aprovada"
+                    conn.update(worksheet="viagens", data=df_viagens)
                     st.rerun()
 
                 if btn_excluir:
-                    CURSOR.execute(
-                        "DELETE FROM viagens WHERE id = ?", (row["id"],)
-                    )
-                    CONN.commit()
+                    df_viagens = df_viagens[df_viagens["id"] != row["id"]]
+                    conn.update(worksheet="viagens", data=df_viagens)
                     st.rerun()
             st.divider()
 
@@ -199,7 +183,7 @@ elif menu == "⚠️ Aprovação de Duplicadas":
 elif menu == "⚙️ Configurações / Custos Fixos":
     st.header("⚙️ Configuração de Parâmetros do Veículo e Custos")
 
-    p = pd.read_sql_query("SELECT * FROM parametros WHERE id=1", CONN).iloc[0]
+    p = carregar_parametros()
 
     with st.form("form_custos"):
         st.subheader("Veículo & Consumo")
@@ -259,37 +243,35 @@ elif menu == "⚙️ Configurações / Custos Fixos":
         salvar = st.form_submit_button("💾 Salvar Parâmetros")
 
         if salvar:
-            CURSOR.execute(
-                """
-                UPDATE parametros SET
-                valor_veiculo=?, distancia_dia=?, consumo_kml=?, valor_combustivel=?, pedagio_dia=?,
-                oleo_valor=?, oleo_km=?, pneus_valor=?, pneus_km=?, depreciacao_pct=?, ipva_pct=?, seguro_ano=?
-                WHERE id=1
-            """,
-                (
-                    valor_veiculo,
-                    distancia_dia,
-                    consumo_kml,
-                    valor_combustivel,
-                    pedagio_dia,
-                    oleo_valor,
-                    oleo_km,
-                    pneus_valor,
-                    pneus_km,
-                    depreciacao_pct,
-                    ipva_pct,
-                    seguro_ano,
-                ),
+            df_param = pd.DataFrame(
+                [
+                    {
+                        "id": 1,
+                        "valor_veiculo": valor_veiculo,
+                        "distancia_dia": distancia_dia,
+                        "consumo_kml": consumo_kml,
+                        "valor_combustivel": valor_combustivel,
+                        "pedagio_dia": pedagio_dia,
+                        "oleo_valor": oleo_valor,
+                        "oleo_km": oleo_km,
+                        "pneus_valor": pneus_valor,
+                        "pneus_km": pneus_km,
+                        "depreciacao_pct": depreciacao_pct,
+                        "ipva_pct": ipva_pct,
+                        "seguro_ano": seguro_ano,
+                    }
+                ]
             )
-            CONN.commit()
-            st.success("✅ Parâmetros salvos com sucesso!")
+            conn.update(worksheet="parametros", data=df_param)
+            st.success("✅ Parâmetros salvos no Google Sheets!")
 
 
 # --------------------------------------------------------------------------
 # 4. CALENDÁRIO E DASHBOARD DE FECHAMENTO
 # --------------------------------------------------------------------------
 elif menu == "📅 Calendário e Dashboard":
-    p = pd.read_sql_query("SELECT * FROM parametros WHERE id=1", CONN).iloc[0]
+    p = carregar_parametros()
+    df_todas_viagens = carregar_viagens()
 
     # Filtros de Mês/Ano
     st.subheader("🔍 Filtro do Fechamento Mensal")
@@ -310,34 +292,28 @@ elif menu == "📅 Calendário e Dashboard":
         f"📅 **Período de Fechamento:** {data_ini.strftime('%d/%m/%Y')} até {data_fim.strftime('%d/%m/%Y')}"
     )
 
-    # Carregar viagens aprovadas do período
-    df_viagens = pd.read_sql_query(
-        """
-        SELECT * FROM viagens 
-        WHERE status = 'Aprovada' 
-        AND data >= ? AND data <= ?
-    """,
-        CONN,
-        params=(data_ini.strftime("%Y-%m-%d"), data_fim.strftime("%Y-%m-%d")),
-    )
+    # Filtrar viagens do período
+    df_todas_viagens["data_dt"] = pd.to_datetime(df_todas_viagens["data"])
+    df_viagens = df_todas_viagens[
+        (df_todas_viagens["status"] == "Aprovada")
+        & (df_todas_viagens["data_dt"] >= data_ini)
+        & (df_todas_viagens["data_dt"] <= data_fim)
+    ]
 
     st.divider()
 
-    # --- VISUALIZAÇÃO DE CALENDÁRIO ---
+    # --- CALENDÁRIO MENSAL ---
     st.subheader(
         f"📅 Calendário de Viagens ({mes_selecionado:02d}/{ano_selecionado})"
     )
 
     feriados_br = holidays.BR(years=ano_selecionado)
 
-    df_mes = pd.read_sql_query(
-        """
-        SELECT data, motorista FROM viagens 
-        WHERE status = 'Aprovada' AND strftime('%m', data) = ? AND strftime('%Y', data) = ?
-    """,
-        CONN,
-        params=(f"{mes_selecionado:02d}", str(ano_selecionado)),
-    )
+    df_mes = df_todas_viagens[
+        (df_todas_viagens["status"] == "Aprovada")
+        & (df_todas_viagens["data_dt"].dt.month == mes_selecionado)
+        & (df_todas_viagens["data_dt"].dt.year == ano_selecionado)
+    ]
     motoristas_por_dia = df_mes.set_index("data")["motorista"].to_dict()
 
     cal = calendar.Calendar(firstweekday=6)
@@ -410,7 +386,6 @@ elif menu == "📅 Calendário e Dashboard":
 
         dirigidas = df_viagens["motorista"].value_counts().to_dict()
 
-        # Fatores de custo unitário por viagem
         custo_combustivel_dia = (
             p["distancia_dia"] / p["consumo_kml"]
         ) * p["valor_combustivel"]
@@ -434,7 +409,6 @@ elif menu == "📅 Calendário e Dashboard":
         )
         custo_total_grupo = total_viagens_grupo * custo_total_viagem_unitaria
 
-        # Rateio do valor devido por integrante
         rateio_por_pessoa = custo_total_grupo / qtd_integrantes
 
         resumo = []
@@ -442,19 +416,16 @@ elif menu == "📅 Calendário e Dashboard":
             v_dirigida = dirigidas.get(nave, 0)
             km_dirigido = v_dirigida * p["distancia_dia"]
 
-            # Custos individuais por viagem efetuada pelo motorista
             v_pneus = v_dirigida * custo_pneus_dia
             v_oleo = v_dirigida * custo_oleo_dia
             v_pedagio = v_dirigida * custo_pedagio_dia
             v_prop_fixo = v_dirigida * custo_fixo_diario
             v_comb = v_dirigida * custo_combustivel_dia
 
-            # Valor Proporcional = Soma total dos gastos gerados pelas viagens da pessoa
             valor_proporcional_gastos = (
                 v_pneus + v_oleo + v_pedagio + v_prop_fixo + v_comb
             )
 
-            # Fechamento = Gastos desembolsados (-) a quota-parte devida no rateio do grupo
             fechamento = valor_proporcional_gastos - rateio_por_pessoa
 
             resumo.append(
@@ -474,7 +445,6 @@ elif menu == "📅 Calendário e Dashboard":
 
         df_resumo = pd.DataFrame(resumo)
 
-        # Linha de Total geral
         linha_total = {
             "Navegante": "Total",
             "KM": int(df_resumo["KM"].sum()),
@@ -492,7 +462,6 @@ elif menu == "📅 Calendário e Dashboard":
             [df_resumo, pd.DataFrame([linha_total])], ignore_index=True
         )
 
-        # CSS para travar a coluna Navegante ao rolar a tabela lateralmente
         st.markdown(
             """
             <style>
@@ -509,7 +478,6 @@ elif menu == "📅 Calendário e Dashboard":
             unsafe_allow_html=True,
         )
 
-        # Renderização da tabela formatada sem índice numérico
         st.dataframe(
             df_exibicao.style.format(
                 {
