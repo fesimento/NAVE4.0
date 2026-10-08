@@ -26,17 +26,24 @@ st.set_page_config(
 )
 
 # --------------------------------------------------------------------------
-# CONEXÃO COM O GOOGLE SHEETS
+# LINK DA SUA PLANILHA NO GOOGLE SHEETS
 # --------------------------------------------------------------------------
-conn = st.connection("gsheets", type=GSheetsConnection)
+URL_PLANILHA = (
+    "https://docs.google.com/spreadsheets/d/1-NQnc7jpcGQ1g0RTu76XXj3h08NhU5QGmxoy_tT3QZk/edit?usp=sharing"
+)
+
+# CONEXÃO COM O GOOGLE SHEETS
+conn = st.connection(
+    "gsheets", type=GSheetsConnection, spreadsheet=URL_PLANILHA
+)
 
 
 def carregar_viagens():
-    return conn.read(worksheet="viagens", ttl="0")
+    return conn.read(spreadsheet=URL_PLANILHA, worksheet="viagens", ttl=0)
 
 
 def carregar_parametros():
-    df_p = conn.read(worksheet="parametros", ttl="0")
+    df_p = conn.read(spreadsheet=URL_PLANILHA, worksheet="parametros", ttl=0)
     return df_p.iloc[0]
 
 
@@ -119,7 +126,11 @@ if menu == "➕ Lançar Viagem":
             df_atualizado = pd.concat(
                 [df_viagens, nova_linha], ignore_index=True
             )
-            conn.update(worksheet="viagens", data=df_atualizado)
+            conn.update(
+                spreadsheet=URL_PLANILHA,
+                worksheet="viagens",
+                data=df_atualizado,
+            )
 
             if status_inicial == "Aprovada":
                 st.success(
@@ -167,12 +178,20 @@ elif menu == "⚠️ Aprovação de Duplicadas":
                     df_viagens.loc[
                         df_viagens["id"] == row["id"], "status"
                     ] = "Aprovada"
-                    conn.update(worksheet="viagens", data=df_viagens)
+                    conn.update(
+                        spreadsheet=URL_PLANILHA,
+                        worksheet="viagens",
+                        data=df_viagens,
+                    )
                     st.rerun()
 
                 if btn_excluir:
                     df_viagens = df_viagens[df_viagens["id"] != row["id"]]
-                    conn.update(worksheet="viagens", data=df_viagens)
+                    conn.update(
+                        spreadsheet=URL_PLANILHA,
+                        worksheet="viagens",
+                        data=df_viagens,
+                    )
                     st.rerun()
             st.divider()
 
@@ -262,7 +281,11 @@ elif menu == "⚙️ Configurações / Custos Fixos":
                     }
                 ]
             )
-            conn.update(worksheet="parametros", data=df_param)
+            conn.update(
+                spreadsheet=URL_PLANILHA,
+                worksheet="parametros",
+                data=df_param,
+            )
             st.success("✅ Parâmetros salvos no Google Sheets!")
 
 
