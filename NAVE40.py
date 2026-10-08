@@ -68,8 +68,8 @@ st.sidebar.title("🚗 Nave 40")
 menu = st.sidebar.radio(
     "Menu Principais",
     [
-        "📅 Calendário e Dashboard",
         "➕ Lançar Viagem",
+        "📅 Calendário e Dashboard",
         "⚠️ Aprovação de Duplicadas",
         "⚙️ Configurações / Custos Fixos",
     ],
