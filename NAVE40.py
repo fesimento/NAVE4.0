@@ -1,7 +1,7 @@
 # --------------------------------------------------------------------------
 # 4. CALENDÁRIO E DASHBOARD DE FECHAMENTO
 # --------------------------------------------------------------------------
-elif menu == "📅 Calendário e Dashboard":
+elif menu = "📅 Calendário e Dashboard":
     p = carregar_parametros()
     df_todas_viagens = carregar_viagens()
 
