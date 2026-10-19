@@ -1,7 +1,310 @@
+import calendar
+from datetime import datetime
+import subprocess
+import sys
+
+# Garante a instalação/importação do pacote holidays
+try:
+    import holidays
+except ImportError:
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "holidays"]
+    )
+    import holidays
+
+import pandas as pd
+import streamlit as st
+from streamlit_gsheets import GSheetsConnection
+
+# --------------------------------------------------------------------------
+# CONFIGURAÇÃO DA PÁGINA
+# --------------------------------------------------------------------------
+st.set_page_config(
+    page_title="Fechamento de Caronas - Nave 40",
+    page_icon="🚗",
+    layout="wide",
+)
+
+# --------------------------------------------------------------------------
+# LINK DA SUA PLANILHA NO GOOGLE SHEETS
+# --------------------------------------------------------------------------
+URL_PLANILHA = (
+    "https://docs.google.com/spreadsheets/d/SEU_ID_DA_PLANILHA/edit"
+)
+
+# CONEXÃO COM O GOOGLE SHEETS
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+
+def carregar_viagens():
+    df = conn.read(spreadsheet=URL_PLANILHA, worksheet="viagens", ttl=0)
+    if not df.empty:
+        df.columns = df.columns.str.strip().str.lower()
+    return df
+
+
+def carregar_parametros():
+    df_p = conn.read(spreadsheet=URL_PLANILHA, worksheet="parametros", ttl=0)
+    return df_p.iloc[0]
+
+
+INTEGRANTES = ["Rogério", "Jonatas", "Gustavo", "Felipe", "Edgar"]
+
+
+def get_datas_fechamento(ano, mes):
+    if mes == 1:
+        data_inicio = pd.Timestamp(year=ano - 1, month=12, day=15)
+    else:
+        data_inicio = pd.Timestamp(year=ano, month=mes - 1, day=15)
+
+    data_fim = pd.Timestamp(year=ano, month=mes, day=14)
+    return data_inicio, data_fim
+
+
+# --------------------------------------------------------------------------
+# SIDEBAR: MENU PRINCIPAL
+# --------------------------------------------------------------------------
+st.sidebar.title("🚗 Nave 40")
+menu = st.sidebar.radio(
+    "Menu Principais",
+    [
+        "📅 Calendário e Dashboard",
+        "➕ Lançar Viagem",
+        "⚠️ Aprovação de Duplicadas",
+        "⚙️ Configurações / Custos Fixos",
+    ],
+)
+
+
+# --------------------------------------------------------------------------
+# 1. LANÇAR VIAGEM
+# --------------------------------------------------------------------------
+if menu == "➕ Lançar Viagem":
+    st.header("📋 Registrar Viagem do Dia")
+
+    data_viagem = st.date_input("Data da viagem", value=datetime.today())
+    data_str = data_viagem.strftime("%Y-%m-%d")
+
+    df_viagens = carregar_viagens()
+
+    # Verificar viagens existentes na data selecionada
+    if not df_viagens.empty and "data" in df_viagens.columns:
+        existentes = df_viagens[
+            (df_viagens["data"] == data_str)
+            & (df_viagens["status"] != "Rejeitada")
+        ]
+    else:
+        existentes = pd.DataFrame()
+
+    if not existentes.empty:
+        motoristas_existentes = existentes["motorista"].tolist()
+        st.warning(
+            f"⚠️ **Atenção:** Já existe viagem registrada para essa data ({data_viagem.strftime('%d/%m/%Y')}) por: **{', '.join(motoristas_existentes)}**!"
+        )
+        st.info(
+            "Se você confirmar o envio, o lançamento irá para a **Aba de Aprovação de Duplicadas**."
+        )
+
+    with st.form("form_viagem", clear_on_submit=True):
+        motorista = st.selectbox("Motorista (Navegante)", INTEGRANTES)
+        submetido = st.form_submit_button("Lançar Viagem")
+
+        if submetido:
+            status_inicial = (
+                "Pendente (Duplicada)" if not existentes.empty else "Aprovada"
+            )
+            novo_id = (
+                int(df_viagens["id"].max())
+                if not df_viagens.empty and "id" in df_viagens.columns
+                else 0
+            ) + 1
+
+            nova_linha = pd.DataFrame(
+                [
+                    {
+                        "id": novo_id,
+                        "data": data_str,
+                        "motorista": motorista,
+                        "status": status_inicial,
+                    }
+                ]
+            )
+
+            df_atualizado = pd.concat(
+                [df_viagens, nova_linha], ignore_index=True
+            )
+            conn.update(
+                spreadsheet=URL_PLANILHA,
+                worksheet="viagens",
+                data=df_atualizado,
+            )
+
+            if status_inicial == "Aprovada":
+                st.success(
+                    f"✅ Viagem de **{motorista}** gravada com sucesso no Google Sheets!"
+                )
+            else:
+                st.warning(
+                    f"⚠️ Viagem pendente gravada no Google Sheets! Acesse a aba **Aprovação de Duplicadas**."
+                )
+
+
+# --------------------------------------------------------------------------
+# 2. APROVAÇÃO DE VIAGENS DUPLICADAS
+# --------------------------------------------------------------------------
+elif menu == "⚠️ Aprovação de Duplicadas":
+    st.header("⚠️ Aprovação de Viagens Duplicadas")
+    st.write(
+        "Analise e regularize lançamentos duplicados ou pendentes de confirmação."
+    )
+
+    df_viagens = carregar_viagens()
+
+    if df_viagens.empty or "data" not in df_viagens.columns:
+        st.success("🎉 Nenhuma viagem duplicada encontrada!")
+    else:
+        duplicadas_datas = df_viagens[
+            df_viagens.duplicated(subset=["data"], keep=False)
+        ]["data"].unique()
+        df_duplicadas = df_viagens[
+            (df_viagens["status"] == "Pendente (Duplicada)")
+            | (df_viagens["data"].isin(duplicadas_datas))
+        ]
+
+        if df_duplicadas.empty:
+            st.success("🎉 Nenhuma viagem duplicada encontrada!")
+        else:
+            for index, row in df_duplicadas.iterrows():
+                col1, col2, col3, col4 = st.columns([2, 2, 2, 3])
+                col1.write(f"**Data:** {row['data']}")
+                col2.write(f"**Motorista:** {row['motorista']}")
+                col3.write(f"**Status:** {row['status']}")
+
+                with col4:
+                    btn_aprovar = st.button("Aprovar", key=f"ap_{row['id']}")
+                    btn_excluir = st.button("Excluir", key=f"del_{row['id']}")
+
+                    if btn_aprovar:
+                        df_viagens.loc[
+                            df_viagens["id"] == row["id"], "status"
+                        ] = "Aprovada"
+                        conn.update(
+                            spreadsheet=URL_PLANILHA,
+                            worksheet="viagens",
+                            data=df_viagens,
+                        )
+                        st.rerun()
+
+                    if btn_excluir:
+                        df_viagens = df_viagens[
+                            df_viagens["id"] != row["id"]
+                        ]
+                        conn.update(
+                            spreadsheet=URL_PLANILHA,
+                            worksheet="viagens",
+                            data=df_viagens,
+                        )
+                        st.rerun()
+                st.divider()
+
+
+# --------------------------------------------------------------------------
+# 3. CONFIGURAÇÕES E CUSTOS FIXOS
+# --------------------------------------------------------------------------
+elif menu == "⚙️ Configurações / Custos Fixos":
+    st.header("⚙️ Configuração de Parâmetros do Veículo e Custos")
+
+    p = carregar_parametros()
+
+    with st.form("form_custos"):
+        st.subheader("Veículo & Consumo")
+        c1, c2, c3 = st.columns(3)
+        valor_veiculo = c1.number_input(
+            "Valor veículo (R$)", value=float(p["valor_veiculo"]), step=1000.0
+        )
+        distancia_dia = c2.number_input(
+            "Distância percorrida (km/dia)",
+            value=float(p["distancia_dia"]),
+            step=5.0,
+        )
+        consumo_kml = c3.number_input(
+            "Consumo esp. combustível (km/l)",
+            value=float(p["consumo_kml"]),
+            step=0.5,
+        )
+
+        st.subheader("Custos Operacionais Diários")
+        c4, c5 = st.columns(2)
+        valor_combustivel = c4.number_input(
+            "Valor combustível (R$/l)",
+            value=float(p["valor_combustivel"]),
+            step=0.10,
+        )
+        pedagio_dia = c5.number_input(
+            "Pedágio (R$/dia)", value=float(p["pedagio_dia"]), step=1.0
+        )
+
+        st.subheader("Manutenção (Óleo e Pneus)")
+        c6, c7, c8, c9 = st.columns(4)
+        oleo_valor = c6.number_input(
+            "Óleo/filtros (R$)", value=float(p["oleo_valor"])
+        )
+        oleo_km = c7.number_input(
+            "Óleo troca (KM)", value=float(p["oleo_km"])
+        )
+        pneus_valor = c8.number_input(
+            "Pneus jogo (R$)", value=float(p["pneus_valor"])
+        )
+        pneus_km = c9.number_input(
+            "Pneus troca (KM)", value=float(p["pneus_km"])
+        )
+
+        st.subheader("Custos Anuais Fixos")
+        c10, c11, c12 = st.columns(3)
+        depreciacao_pct = c10.number_input(
+            "Depreciação (%)", value=float(p["depreciacao_pct"])
+        )
+        ipva_pct = c11.number_input(
+            "IPVA/Licenciamento (%)", value=float(p["ipva_pct"])
+        )
+        seguro_ano = c12.number_input(
+            "Seguro (R$/ano)", value=float(p["seguro_ano"])
+        )
+
+        salvar = st.form_submit_button("💾 Salvar Parâmetros")
+
+        if salvar:
+            df_param = pd.DataFrame(
+                [
+                    {
+                        "id": 1,
+                        "valor_veiculo": valor_veiculo,
+                        "distancia_dia": distancia_dia,
+                        "consumo_kml": consumo_kml,
+                        "valor_combustivel": valor_combustivel,
+                        "pedagio_dia": pedagio_dia,
+                        "oleo_valor": oleo_valor,
+                        "oleo_km": oleo_km,
+                        "pneus_valor": pneus_valor,
+                        "pneus_km": pneus_km,
+                        "depreciacao_pct": depreciacao_pct,
+                        "ipva_pct": ipva_pct,
+                        "seguro_ano": seguro_ano,
+                    }
+                ]
+            )
+            conn.update(
+                spreadsheet=URL_PLANILHA,
+                worksheet="parametros",
+                data=df_param,
+            )
+            st.success("✅ Parâmetros salvos no Google Sheets!")
+
+
 # --------------------------------------------------------------------------
 # 4. CALENDÁRIO E DASHBOARD DE FECHAMENTO
 # --------------------------------------------------------------------------
-elif menu = "📅 Calendário e Dashboard":
+elif menu == "📅 Calendário e Dashboard":
     p = carregar_parametros()
     df_todas_viagens = carregar_viagens()
 
@@ -203,11 +506,10 @@ elif menu = "📅 Calendário e Dashboard":
             st.divider()
 
             # --------------------------------------------------------------------------
-            # TABELA PICLES - RESUMO DE QUEM PAGA PARA QUEM (Otimizado)
+            # TABELA PICLES - RESUMO DE QUEM PAGA PARA QUEM
             # --------------------------------------------------------------------------
             st.subheader("🥒 PICLES — Acerto de Contas (Menor Nº de PIX)")
 
-            # Função de cálculo
             def calcular_picles(df_resumo_in):
                 devedores = []
                 credores = []
