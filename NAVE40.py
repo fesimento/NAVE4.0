@@ -505,12 +505,12 @@ elif menu == "📅 Calendário e Dashboard":
 
             st.divider()
 
-            # --------------------------------------------------------------------------
+           # --------------------------------------------------------------------------
             # TABELA PICLES - RESUMO DE QUEM PAGA PARA QUEM
             # --------------------------------------------------------------------------
             st.subheader("🥒 PICLES — Acerto de Contas (Menor Nº de PIX)")
 
-            def calcular_picles(df_resumo_in):
+            def calcular_picles(df_resumo_in, df_pix_in):
                 devedores = []
                 credores = []
 
@@ -520,6 +520,12 @@ elif menu == "📅 Calendário e Dashboard":
                         devedores.append([row["Navegante"], abs(saldo)])
                     elif saldo > 0.01:
                         credores.append([row["Navegante"], saldo])
+
+                pix_dict = {}
+                if not df_pix_in.empty and "navegante" in df_pix_in.columns:
+                    pix_dict = df_pix_in.set_index("navegante")[
+                        "chave_pix"
+                    ].to_dict()
 
                 transacoes = []
                 i, j = 0, 0
@@ -531,11 +537,13 @@ elif menu == "📅 Calendário e Dashboard":
                     pagamento = min(val_dev, val_cred)
 
                     if pagamento > 0.01:
+                        chave = pix_dict.get(nome_cred, "Não cadastrada")
                         transacoes.append(
                             {
                                 "De (Quem Paga)": nome_dev,
                                 "Para (Quem Recebe)": nome_cred,
                                 "Valor (R$)": pagamento,
+                                "Chave Pix": chave,
                             }
                         )
 
@@ -549,14 +557,15 @@ elif menu == "📅 Calendário e Dashboard":
 
                 return pd.DataFrame(transacoes)
 
-            df_picles = calcular_picles(df_resumo)
+            df_pix = carregar_pix()
+            df_picles = calcular_picles(df_resumo, df_pix)
 
             if df_picles.empty:
                 st.success(
                     "🎉 Todas as contas estão zeradas! Ninguém precisa pagar ninguém."
                 )
             else:
-                col_p1, col_p2 = st.columns([2, 1])
+                col_p1, col_p2 = st.columns([3, 1])
 
                 with col_p1:
                     st.dataframe(
@@ -567,8 +576,17 @@ elif menu == "📅 Calendário e Dashboard":
 
                 with col_p2:
                     st.info(
-                        "💡 **Regra PICLES:** Esta tabela calcula a combinação ideal para quitar todas as dívidas do período com o menor número possível de transferências."
+                        "💡 **Regra PICLES:** Esta tabela indica exatamente para quem e quanto transferir com o menor número de operações. Copie a chave Pix do destinatário para realizar o pagamento."
                     )
+
+                st.write("📱 **Chaves para Cópia Rápida:**")
+                cols_btn = st.columns(len(df_picles))
+                for idx, row in df_picles.iterrows():
+                    with cols_btn[idx % len(cols_btn)]:
+                        st.code(f"{row['Chave Pix']}", language="text")
+                        st.caption(
+                            f"Pix para **{row['Para (Quem Recebe)']}** (R$ {row['Valor (R$)']:,.2f})"
+                        )
 
         st.divider()
 
