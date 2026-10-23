@@ -1,17 +1,19 @@
 import calendar
+import crcmod
 from datetime import datetime
 import subprocess
 import sys
 
-# Garante a instalação e importação do pacote holidays
-try:
-    import holidays
-except ImportError:
-    subprocess.check_call(
-        [sys.executable, "-m", "pip", "install", "holidays"]
-    )
-    import holidays
+# Garante a instalação/importação dos pacotes
+for pkg in ["holidays", "crcmod"]:
+    try:
+        __import__(pkg)
+    except ImportError:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", pkg]
+        )
 
+import holidays
 import pandas as pd
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
@@ -28,7 +30,6 @@ st.set_page_config(
 # --------------------------------------------------------------------------
 # LINK DA SUA PLANILHA NO GOOGLE SHEETS
 # --------------------------------------------------------------------------
-# Substitua o link abaixo pela URL exata da sua planilha do Google Sheets
 URL_PLANILHA = (
     "https://docs.google.com/spreadsheets/d/1-NQnc7jpcGQ1g0RTu76XXj3h08NhU5QGmxoy_tT3QZk/edit?usp=drive_link/edit"
 )
@@ -38,7 +39,34 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 
 # --------------------------------------------------------------------------
-# FUNÇÕES DE LEITURA E INTEGRAÇÃO COM O GOOGLE SHEETS
+# GERADOR DE PAYLOAD PIX COPIA E COLA (PADRÃO EMV)
+# --------------------------------------------------------------------------
+def gerar_payload_pix(chave, nome_recebedor, valor, cidade="SAO PAULO"):
+    chave = str(chave).replace(".0", "").strip()
+    nome = nome_recebedor[:25].strip()
+    cidade = cidade[:15].strip()
+    valor_str = f"{valor:.2f}"
+
+    payload = (
+        "000201"
+        f"26{len(f'0014br.gov.bcb.pix01{len(chave):02d}{chave}'):02d}0014br.gov.bcb.pix01{len(chave):02d}{chave}"
+        "52040000"
+        "5303986"
+        f"54{len(valor_str):02d}{valor_str}"
+        "5802BR"
+        f"59{len(nome):02d}{nome}"
+        f"60{len(cidade):02d}{cidade}"
+        "62070503***"
+        "6304"
+    )
+
+    crc16_func = crcmod.mkCrcFun(0x11021, rev=False, initCrc=0xFFFF, xorOut=0x0000)
+    crc = hex(crc16_func(payload.encode("utf-8"))).upper()[2:].zfill(4)
+    return payload + crc
+
+
+# --------------------------------------------------------------------------
+# FUNÇÕES DE LEITURA
 # --------------------------------------------------------------------------
 def carregar_viagens():
     df = conn.read(spreadsheet=URL_PLANILHA, worksheet="viagens", ttl=0)
@@ -54,14 +82,12 @@ def carregar_parametros():
 
 def carregar_pix():
     try:
-        # Lê a aba de chaves pix tratando todas as colunas como texto puro
         df_pix = conn.read(
             spreadsheet=URL_PLANILHA, worksheet="pix", dtype=str, ttl=0
         )
         if not df_pix.empty:
             df_pix.columns = df_pix.columns.str.strip().str.lower()
             if "chave_pix" in df_pix.columns:
-                # Trata e remove o .0 indesejado proveniente de números de telefone ou CPF
                 df_pix["chave_pix"] = (
                     df_pix["chave_pix"]
                     .astype(str)
@@ -101,12 +127,19 @@ def calcular_picles(df_resumo_in, df_pix_in):
             chave = str(pix_dict.get(nome_cred, "Não cadastrada")).replace(
                 ".0", ""
             )
+            payload_pix = (
+                gerar_payload_pix(chave, nome_cred, pagamento)
+                if chave != "Não cadastrada"
+                else "Chave não cadastrada"
+            )
+
             transacoes.append(
                 {
                     "De (Quem Paga)": nome_dev,
                     "Para (Quem Recebe)": nome_cred,
                     "Valor (R$)": pagamento,
                     "Chave Pix": chave,
+                    "Pix Copia e Cola": payload_pix,
                 }
             )
 
@@ -135,7 +168,7 @@ def get_datas_fechamento(ano, mes):
 
 
 # --------------------------------------------------------------------------
-# SIDEBAR: MENU PRINCIPAL
+# SIDEBAR
 # --------------------------------------------------------------------------
 st.sidebar.title("🚗 Nave 40")
 menu = st.sidebar.radio(
@@ -148,7 +181,6 @@ menu = st.sidebar.radio(
     ],
 )
 
-
 # --------------------------------------------------------------------------
 # 1. LANÇAR VIAGEM
 # --------------------------------------------------------------------------
@@ -160,7 +192,6 @@ if menu == "➕ Lançar Viagem":
 
     df_viagens = carregar_viagens()
 
-    # Verificar viagens existentes na data selecionada
     if not df_viagens.empty and "data" in df_viagens.columns:
         existentes = df_viagens[
             (df_viagens["data"] == data_str)
@@ -173,9 +204,6 @@ if menu == "➕ Lançar Viagem":
         motoristas_existentes = existentes["motorista"].tolist()
         st.warning(
             f"⚠️ **Atenção:** Já existe viagem registrada para essa data ({data_viagem.strftime('%d/%m/%Y')}) por: **{', '.join(motoristas_existentes)}**!"
-        )
-        st.info(
-            "Se você confirmar o envio, o lançamento irá para a **Aba de Aprovação de Duplicadas**."
         )
 
     with st.form("form_viagem", clear_on_submit=True):
@@ -213,24 +241,15 @@ if menu == "➕ Lançar Viagem":
             )
 
             if status_inicial == "Aprovada":
-                st.success(
-                    f"✅ Viagem de **{motorista}** gravada com sucesso no Google Sheets!"
-                )
+                st.success(f"✅ Viagem de **{motorista}** gravada com sucesso!")
             else:
-                st.warning(
-                    f"⚠️ Viagem pendente gravada no Google Sheets! Acesse a aba **Aprovação de Duplicadas**."
-                )
-
+                st.warning(f"⚠️ Viagem pendente gravada!")
 
 # --------------------------------------------------------------------------
-# 2. APROVAÇÃO DE VIAGENS DUPLICADAS
+# 2. APROVAÇÃO DE DUPLICADAS
 # --------------------------------------------------------------------------
 elif menu == "⚠️ Aprovação de Duplicadas":
     st.header("⚠️ Aprovação de Viagens Duplicadas")
-    st.write(
-        "Analise e regularize lançamentos duplicados ou pendentes de confirmação."
-    )
-
     df_viagens = carregar_viagens()
 
     if df_viagens.empty or "data" not in df_viagens.columns:
@@ -280,13 +299,11 @@ elif menu == "⚠️ Aprovação de Duplicadas":
                         st.rerun()
                 st.divider()
 
-
 # --------------------------------------------------------------------------
-# 3. CONFIGURAÇÕES E CUSTOS FIXOS
+# 3. CONFIGURAÇÕES
 # --------------------------------------------------------------------------
 elif menu == "⚙️ Configurações / Custos Fixos":
     st.header("⚙️ Configuração de Parâmetros do Veículo e Custos")
-
     p = carregar_parametros()
 
     with st.form("form_custos"):
@@ -371,11 +388,10 @@ elif menu == "⚙️ Configurações / Custos Fixos":
                 worksheet="parametros",
                 data=df_param,
             )
-            st.success("✅ Parâmetros salvos no Google Sheets!")
-
+            st.success("✅ Parâmetros salvos!")
 
 # --------------------------------------------------------------------------
-# 4. CALENDÁRIO E DASHBOARD DE FECHAMENTO
+# 4. CALENDÁRIO E DASHBOARD
 # --------------------------------------------------------------------------
 elif menu == "📅 Calendário e Dashboard":
     p = carregar_parametros()
@@ -396,7 +412,6 @@ elif menu == "📅 Calendário e Dashboard":
         12: "Dezembro",
     }
 
-    # Filtros de Mês/Ano
     st.subheader("🔍 Filtro do Fechamento Mensal")
     col_mes, col_ano = st.columns(2)
 
@@ -413,7 +428,7 @@ elif menu == "📅 Calendário e Dashboard":
 
     if not meses_selecionados:
         st.warning(
-            "⚠️ Por favor, selecione pelo menos um mês de referência no filtro acima."
+            "⚠️ Por favor, selecione pelo menos um mês de referência."
         )
     else:
         intervalos_datas = [
@@ -430,9 +445,7 @@ elif menu == "📅 Calendário e Dashboard":
         st.caption(f"📅 **Período(s) de Fechamento:** {periodos_str}")
 
         if df_todas_viagens.empty or "data" not in df_todas_viagens.columns:
-            st.info(
-                "Nenhuma viagem cadastrada na planilha ou a coluna 'data' não foi encontrada."
-            )
+            st.info("Nenhuma viagem cadastrada na planilha.")
             df_viagens = pd.DataFrame()
         else:
             df_todas_viagens["data_dt"] = pd.to_datetime(
@@ -451,13 +464,11 @@ elif menu == "📅 Calendário e Dashboard":
 
         st.divider()
 
-        # --- TABELA DE FECHAMENTO FINANCEIRO CONSOLIDADA ---
+        # TABELA DE FECHAMENTO FINANCEIRO
         st.subheader("📊 Tabela de Fechamento Individual Consolidada")
 
         if df_viagens.empty:
-            st.info(
-                "Nenhuma viagem realizada no(s) período(s) de fechamento selecionado(s)."
-            )
+            st.info("Nenhuma viagem realizada no período selecionado.")
         else:
             qtd_integrantes = len(INTEGRANTES)
             total_viagens_grupo = len(df_viagens)
@@ -578,9 +589,7 @@ elif menu == "📅 Calendário e Dashboard":
 
             st.divider()
 
-            # --------------------------------------------------------------------------
-            # TABELA PICLES - RESUMO DE QUEM PAGA PARA QUEM
-            # --------------------------------------------------------------------------
+            # TABELA PICLES
             st.subheader("🥒 PICLES — Acerto de Contas (Menor Nº de PIX)")
 
             df_pix = carregar_pix()
@@ -602,6 +611,7 @@ elif menu == "📅 Calendário e Dashboard":
                             "Para (Quem Recebe)",
                             "Valor Formatado",
                             "Chave Pix",
+                            "Pix Copia e Cola",
                         ]
                     ],
                     column_config={
@@ -612,9 +622,10 @@ elif menu == "📅 Calendário e Dashboard":
                             "Para (Quem Recebe)"
                         ),
                         "Valor Formatado": st.column_config.TextColumn("Valor"),
-                        "Chave Pix": st.column_config.TextColumn(
-                            "Chave Pix (Clique para copiar)",
-                            help="Clique na célula e copie o valor para colar diretamente no app do banco",
+                        "Chave Pix": st.column_config.TextColumn("Chave Pix"),
+                        "Pix Copia e Cola": st.column_config.TextColumn(
+                            "Pix Copia e Cola (Com valor preenchido)",
+                            help="Copie este código longo e cole na área 'Pix Copia e Cola' do aplicativo do seu banco",
                         ),
                     },
                     use_container_width=True,
@@ -622,12 +633,15 @@ elif menu == "📅 Calendário e Dashboard":
                 )
 
                 st.info(
-                    "💡 **Instruções:** As chaves Pix estão limpas (sem decimal `.0`). Basta tocar duas vezes na célula da chave Pix desejada para copiar diretamente para a sua área de transferência!"
+                    "💡 **Instruções para Pagamento:**\n"
+                    "1. Clique na célula da coluna **Pix Copia e Cola** da pessoa que vai pagar.\n"
+                    "2. Copie o texto longo e abra o aplicativo do seu banco.\n"
+                    "3. Escolha a opção **Pix > Copia e Cola**. O valor exato e o recebedor já virão preenchidos automaticamente!"
                 )
 
         st.divider()
 
-        # --- CALENDÁRIO MENSAL ---
+        # CALENDÁRIO MENSAL
         st.subheader("📅 Calendário de Viagens")
 
         feriados_br = holidays.BR(years=ano_selecionado)
