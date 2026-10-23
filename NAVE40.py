@@ -152,7 +152,7 @@ def calcular_picles(df_resumo_in, df_pix_in):
     return pd.DataFrame(transacoes)
 
 
-INTEGRANTES = ["Rogério", "Jonatas", "Gustavo", "Felipe", "Edgar"]
+INTEGRANTES = ["Rogerio", "Jonatas", "Gustavo", "Felipe", "Edgar"]
 
 
 def get_datas_fechamento(ano, mes):
