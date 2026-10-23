@@ -16,6 +16,8 @@ for pkg in ["holidays", "crcmod"]:
 import holidays
 import pandas as pd
 import streamlit as st
+
+import streamlit.components.v1 as components
 from streamlit_gsheets import GSheetsConnection
 
 # --------------------------------------------------------------------------
@@ -63,6 +65,48 @@ def gerar_payload_pix(chave, nome_recebedor, valor, cidade="SAO PAULO"):
     crc16_func = crcmod.mkCrcFun(0x11021, rev=False, initCrc=0xFFFF, xorOut=0x0000)
     crc = hex(crc16_func(payload.encode("utf-8"))).upper()[2:].zfill(4)
     return payload + crc
+
+
+# --------------------------------------------------------------------------
+# COMPONENTE DE BOTÃO DE CÓPIA HTML/JS
+# --------------------------------------------------------------------------
+def gerar_botao_copiar_pix(payload, rotulo, idx):
+    html_code = f"""
+    <div style="margin-bottom: 15px;">
+        <button id="btn_{idx}" onclick="copiarPix_{idx}()" style="
+            background-color: #10B981;
+            color: white;
+            border: none;
+            padding: 10px 18px;
+            font-size: 14px;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            width: 100%;
+            transition: 0.2s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        ">
+            📋 Copiar Pix ({rotulo})
+        </button>
+        <div id="msg_{idx}" style="color: #059669; font-size: 12px; font-weight: bold; margin-top: 5px; display: none; text-align: center;">
+            ✅ Pix Copiado! Abra o app do banco.
+        </div>
+    </div>
+
+    <script>
+    function copiarPix_{idx}() {{
+        const textToCopy = "{payload}";
+        navigator.clipboard.writeText(textToCopy).then(() => {{
+            const msg = document.getElementById("msg_{idx}");
+            msg.style.display = "block";
+            setTimeout(() => {{ msg.style.display = "none"; }}, 3000);
+        }}).catch(err => {{
+            alert("Erro ao copiar: " + err);
+        }});
+    }}
+    </script>
+    """
+    components.html(html_code, height=75)
 
 
 # --------------------------------------------------------------------------
@@ -130,7 +174,7 @@ def calcular_picles(df_resumo_in, df_pix_in):
             payload_pix = (
                 gerar_payload_pix(chave, nome_cred, pagamento)
                 if chave != "Não cadastrada"
-                else "Chave não cadastrada"
+                else ""
             )
 
             transacoes.append(
@@ -139,7 +183,7 @@ def calcular_picles(df_resumo_in, df_pix_in):
                     "Para (Quem Recebe)": nome_cred,
                     "Valor (R$)": pagamento,
                     "Chave Pix": chave,
-                    "Pix Copia e Cola": payload_pix,
+                    "Payload Pix": payload_pix,
                 }
             )
 
@@ -611,7 +655,6 @@ elif menu == "📅 Calendário e Dashboard":
                             "Para (Quem Recebe)",
                             "Valor Formatado",
                             "Chave Pix",
-                            "Pix Copia e Cola",
                         ]
                     ],
                     column_config={
@@ -623,21 +666,27 @@ elif menu == "📅 Calendário e Dashboard":
                         ),
                         "Valor Formatado": st.column_config.TextColumn("Valor"),
                         "Chave Pix": st.column_config.TextColumn("Chave Pix"),
-                        "Pix Copia e Cola": st.column_config.TextColumn(
-                            "Pix Copia e Cola (Com valor preenchido)",
-                            help="Copie este código longo e cole na área 'Pix Copia e Cola' do aplicativo do seu banco",
-                        ),
                     },
                     use_container_width=True,
                     hide_index=True,
                 )
 
-                st.info(
-                    "💡 **Instruções para Pagamento:**\n"
-                    "1. Clique na célula da coluna **Pix Copia e Cola** da pessoa que vai pagar.\n"
-                    "2. Copie o texto longo e abra o aplicativo do seu banco.\n"
-                    "3. Escolha a opção **Pix > Copia e Cola**. O valor exato e o recebedor já virão preenchidos automaticamente!"
-                )
+                st.write("📲 **Ações Rápidas de Pagamento:**")
+                cols_p = st.columns(len(df_picles))
+                for idx, row in df_picles.iterrows():
+                    with cols_p[idx % len(cols_p)]:
+                        rotulo = f"{row['De (Quem Paga)']} ➔ {row['Para (Quem Recebe)']} R$ {row['Valor (R$)']:,.2f}"
+                        if (
+                            row["Payload Pix"]
+                            and row["Payload Pix"] != "Chave não cadastrada"
+                        ):
+                            gerar_botao_copiar_pix(
+                                row["Payload Pix"], rotulo, idx
+                            )
+                        else:
+                            st.warning(
+                                f"Chave de {row['Para (Quem Recebe)']} não cadastrada."
+                            )
 
         st.divider()
 
