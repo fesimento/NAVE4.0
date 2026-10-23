@@ -1,23 +1,19 @@
 import calendar
-import crcmod
 from datetime import datetime
 import subprocess
 import sys
 
-# Garante a instalação/importação dos pacotes
+# Garante a instalação e importação dos pacotes
 for pkg in ["holidays", "crcmod"]:
     try:
         __import__(pkg)
     except ImportError:
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", pkg]
-        )
+        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
 
+import crcmod
 import holidays
 import pandas as pd
 import streamlit as st
-
-import streamlit.components.v1 as components
 from streamlit_gsheets import GSheetsConnection
 
 # --------------------------------------------------------------------------
@@ -32,9 +28,7 @@ st.set_page_config(
 # --------------------------------------------------------------------------
 # LINK DA SUA PLANILHA NO GOOGLE SHEETS
 # --------------------------------------------------------------------------
-URL_PLANILHA = (
-    "https://docs.google.com/spreadsheets/d/1-NQnc7jpcGQ1g0RTu76XXj3h08NhU5QGmxoy_tT3QZk/edit?usp=drive_link/edit"
-)
+URL_PLANILHA = "https://docs.google.com/spreadsheets/d/1-NQnc7jpcGQ1g0RTu76XXj3h08NhU5QGmxoy_tT3QZk/edit?usp=drive_link/edit"
 
 # CONEXÃO COM O GOOGLE SHEETS
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -62,51 +56,11 @@ def gerar_payload_pix(chave, nome_recebedor, valor, cidade="SAO PAULO"):
         "6304"
     )
 
-    crc16_func = crcmod.mkCrcFun(0x11021, rev=False, initCrc=0xFFFF, xorOut=0x0000)
+    crc16_func = crcmod.mkCrcFun(
+        0x11021, rev=False, initCrc=0xFFFF, xorOut=0x0000
+    )
     crc = hex(crc16_func(payload.encode("utf-8"))).upper()[2:].zfill(4)
     return payload + crc
-
-
-# --------------------------------------------------------------------------
-# COMPONENTE DE BOTÃO DE CÓPIA HTML/JS
-# --------------------------------------------------------------------------
-def gerar_botao_copiar_pix(payload, rotulo, idx):
-    html_code = f"""
-    <div style="margin-bottom: 15px;">
-        <button id="btn_{idx}" onclick="copiarPix_{idx}()" style="
-            background-color: #10B981;
-            color: white;
-            border: none;
-            padding: 10px 18px;
-            font-size: 14px;
-            font-weight: bold;
-            border-radius: 8px;
-            cursor: pointer;
-            width: 100%;
-            transition: 0.2s;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        ">
-            📋 Copiar Pix ({rotulo})
-        </button>
-        <div id="msg_{idx}" style="color: #059669; font-size: 12px; font-weight: bold; margin-top: 5px; display: none; text-align: center;">
-            ✅ Pix Copiado! Abra o app do banco.
-        </div>
-    </div>
-
-    <script>
-    function copiarPix_{idx}() {{
-        const textToCopy = "{payload}";
-        navigator.clipboard.writeText(textToCopy).then(() => {{
-            const msg = document.getElementById("msg_{idx}");
-            msg.style.display = "block";
-            setTimeout(() => {{ msg.style.display = "none"; }}, 3000);
-        }}).catch(err => {{
-            alert("Erro ao copiar: " + err);
-        }});
-    }}
-    </script>
-    """
-    components.html(html_code, height=75)
 
 
 # --------------------------------------------------------------------------
@@ -287,7 +241,7 @@ if menu == "➕ Lançar Viagem":
             if status_inicial == "Aprovada":
                 st.success(f"✅ Viagem de **{motorista}** gravada com sucesso!")
             else:
-                st.warning(f"⚠️ Viagem pendente gravada!")
+                st.warning("⚠️ Viagem pendente gravada!")
 
 # --------------------------------------------------------------------------
 # 2. APROVAÇÃO DE DUPLICADAS
@@ -332,9 +286,7 @@ elif menu == "⚠️ Aprovação de Duplicadas":
                         st.rerun()
 
                     if btn_excluir:
-                        df_viagens = df_viagens[
-                            df_viagens["id"] != row["id"]
-                        ]
+                        df_viagens = df_viagens[df_viagens["id"] != row["id"]]
                         conn.update(
                             spreadsheet=URL_PLANILHA,
                             worksheet="viagens",
@@ -383,9 +335,7 @@ elif menu == "⚙️ Configurações / Custos Fixos":
         oleo_valor = c6.number_input(
             "Óleo/filtros (R$)", value=float(p["oleo_valor"])
         )
-        oleo_km = c7.number_input(
-            "Óleo troca (KM)", value=float(p["oleo_km"])
-        )
+        oleo_km = c7.number_input("Óleo troca (KM)", value=float(p["oleo_km"]))
         pneus_valor = c8.number_input(
             "Pneus jogo (R$)", value=float(p["pneus_valor"])
         )
@@ -471,13 +421,10 @@ elif menu == "📅 Calendário e Dashboard":
     )
 
     if not meses_selecionados:
-        st.warning(
-            "⚠️ Por favor, selecione pelo menos um mês de referência."
-        )
+        st.warning("⚠️ Por favor, selecione pelo menos um mês de referência.")
     else:
         intervalos_datas = [
-            get_datas_fechamento(ano_selecionado, m)
-            for m in meses_selecionados
+            get_datas_fechamento(ano_selecionado, m) for m in meses_selecionados
         ]
 
         periodos_str = " | ".join(
@@ -648,6 +595,7 @@ elif menu == "📅 Calendário e Dashboard":
                     lambda x: f"R$ {x:,.2f}"
                 )
 
+                # Exibição resumida
                 st.dataframe(
                     df_picles[
                         [
@@ -671,22 +619,23 @@ elif menu == "📅 Calendário e Dashboard":
                     hide_index=True,
                 )
 
-                st.write("📲 **Ações Rápidas de Pagamento:**")
-                cols_p = st.columns(len(df_picles))
+                st.write(
+                    "📱 **Pix Copia e Cola (Toque no ícone da prancheta à direita da caixa para copiar com o valor exato):**"
+                )
+
                 for idx, row in df_picles.iterrows():
-                    with cols_p[idx % len(cols_p)]:
-                        rotulo = f"{row['De (Quem Paga)']} ➔ {row['Para (Quem Recebe)']} R$ {row['Valor (R$)']:,.2f}"
-                        if (
-                            row["Payload Pix"]
-                            and row["Payload Pix"] != "Chave não cadastrada"
-                        ):
-                            gerar_botao_copiar_pix(
-                                row["Payload Pix"], rotulo, idx
-                            )
-                        else:
-                            st.warning(
-                                f"Chave de {row['Para (Quem Recebe)']} não cadastrada."
-                            )
+                    if (
+                        row["Payload Pix"]
+                        and row["Payload Pix"] != "Chave não cadastrada"
+                    ):
+                        st.caption(
+                            f"💳 **{row['De (Quem Paga)']}** ➔ **{row['Para (Quem Recebe)']}** ({row['Valor Formatado']}):"
+                        )
+                        st.code(row["Payload Pix"], language="text")
+                    else:
+                        st.warning(
+                            f"⚠️ Chave Pix de **{row['Para (Quem Recebe)']}** não cadastrada na aba 'pix'."
+                        )
 
         st.divider()
 
