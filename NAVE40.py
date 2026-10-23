@@ -1,17 +1,18 @@
 import calendar
-from datetime import datetime
+from datetime import datetime, timedelta
 import subprocess
 import sys
 
-# Garante a instalação e importação dos pacotes
-for pkg in ["holidays", "crcmod"]:
-    try:
-        __import__(pkg)
-    except ImportError:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
+# Garante a instalação e importação do pacote holidays
+try:
+    import holidays
+except ImportError:
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "holidays"]
+    )
+    import holidays
 
 import crcmod
-import holidays
 import pandas as pd
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
@@ -28,7 +29,9 @@ st.set_page_config(
 # --------------------------------------------------------------------------
 # LINK DA SUA PLANILHA NO GOOGLE SHEETS
 # --------------------------------------------------------------------------
-URL_PLANILHA = "https://docs.google.com/spreadsheets/d/1-NQnc7jpcGQ1g0RTu76XXj3h08NhU5QGmxoy_tT3QZk/edit?usp=drive_link/edit"
+URL_PLANILHA = (
+    "https://docs.google.com/spreadsheets/d/1-NQnc7jpcGQ1g0RTu76XXj3h08NhU5QGmxoy_tT3QZk/edit?usp=drive_link/edit"
+)
 
 # CONEXÃO COM O GOOGLE SHEETS
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -43,9 +46,11 @@ def gerar_payload_pix(chave, nome_recebedor, valor, cidade="SAO PAULO"):
     cidade = cidade[:15].strip()
     valor_str = f"{valor:.2f}"
 
+    merchant_account = f"0014br.gov.bcb.pix01{len(chave):02d}{chave}"
+
     payload = (
         "000201"
-        f"26{len(f'0014br.gov.bcb.pix01{len(chave):02d}{chave}'):02d}0014br.gov.bcb.pix01{len(chave):02d}{chave}"
+        f"26{len(merchant_account):02d}{merchant_account}"
         "52040000"
         "5303986"
         f"54{len(valor_str):02d}{valor_str}"
@@ -128,7 +133,7 @@ def calcular_picles(df_resumo_in, df_pix_in):
             payload_pix = (
                 gerar_payload_pix(chave, nome_cred, pagamento)
                 if chave != "Não cadastrada"
-                else ""
+                else "Chave não cadastrada"
             )
 
             transacoes.append(
@@ -424,7 +429,8 @@ elif menu == "📅 Calendário e Dashboard":
         st.warning("⚠️ Por favor, selecione pelo menos um mês de referência.")
     else:
         intervalos_datas = [
-            get_datas_fechamento(ano_selecionado, m) for m in meses_selecionados
+            get_datas_fechamento(ano_selecionado, m)
+            for m in meses_selecionados
         ]
 
         periodos_str = " | ".join(
@@ -595,7 +601,6 @@ elif menu == "📅 Calendário e Dashboard":
                     lambda x: f"R$ {x:,.2f}"
                 )
 
-                # Exibição resumida
                 st.dataframe(
                     df_picles[
                         [
@@ -620,27 +625,19 @@ elif menu == "📅 Calendário e Dashboard":
                 )
 
                 st.write(
-                    "📱 **Pix Copia e Cola (Toque no ícone da prancheta à direita da caixa para copiar com o valor exato):**"
+                    "📱 **Pix Copia e Cola (Toque no ícone da prancheta à direita para copiar o valor pré-preenchido):**"
                 )
 
                 for idx, row in df_picles.iterrows():
-                    if (
-                        row["Payload Pix"]
-                        and row["Payload Pix"] != "Chave não cadastrada"
-                    ):
-                        st.caption(
-                            f"💳 **{row['De (Quem Paga)']}** ➔ **{row['Para (Quem Recebe)']}** ({row['Valor Formatado']}):"
-                        )
-                        st.code(row["Payload Pix"], language="text")
-                    else:
-                        st.warning(
-                            f"⚠️ Chave Pix de **{row['Para (Quem Recebe)']}** não cadastrada na aba 'pix'."
-                        )
+                    st.caption(
+                        f"💳 **{row['De (Quem Paga)']}** ➔ **{row['Para (Quem Recebe)']}** ({row['Valor Formatado']}):"
+                    )
+                    st.code(row["Payload Pix"], language="text")
 
         st.divider()
 
-        # CALENDÁRIO MENSAL
-        st.subheader("📅 Calendário de Viagens")
+        # CALENDÁRIO MENSAL (EXIBINDO A JANELA DO FECHAMENTO: 15 DO MÊS ANTERIOR A 14 DO MÊS SELECIONADO)
+        st.subheader("📅 Calendário do Período de Fechamento")
 
         feriados_br = holidays.BR(years=ano_selecionado)
 
@@ -656,12 +653,40 @@ elif menu == "📅 Calendário e Dashboard":
             else {}
         )
 
-        cal = calendar.Calendar(firstweekday=6)
         dias_semana = ["dom.", "seg.", "ter.", "qua.", "qui.", "sex.", "sáb."]
 
         for m_sel in sorted(meses_selecionados):
-            st.markdown(f"#### 🗓️ {MESES_NOME[m_sel]} / {ano_selecionado}")
-            dias_mes = cal.monthdayscalendar(ano_selecionado, m_sel)
+            dt_ini, dt_fim = get_datas_fechamento(ano_selecionado, m_sel)
+            st.markdown(
+                f"#### 🗓️ Fechamento {MESES_NOME[m_sel]} / {ano_selecionado} ({dt_ini.strftime('%d/%m/%Y')} a {dt_fim.strftime('%d/%m/%Y')})"
+            )
+
+            # Gerar lista contínua de dias da janela de fechamento
+            dias_periodo = []
+            dt_curr = dt_ini
+            while dt_curr <= dt_fim:
+                dias_periodo.append(dt_curr)
+                dt_curr += timedelta(days=1)
+
+            # Agrupar dias em semanas (iniciando no domingo: weekday() 6)
+            semanas = []
+            semana_atual = []
+
+            # Preenchimento de dias vazios antes do início se dt_ini não for domingo
+            primeiro_dia_semana = (dias_periodo[0].weekday() + 1) % 7
+            for _ in range(primeiro_dia_semana):
+                semana_atual.append(None)
+
+            for d_dt in dias_periodo:
+                semana_atual.append(d_dt)
+                if len(semana_atual) == 7:
+                    semanas.append(semana_atual)
+                    semana_atual = []
+
+            if semana_atual:
+                while len(semana_atual) < 7:
+                    semana_atual.append(None)
+                semanas.append(semana_atual)
 
             cal_html = """
             <style>
@@ -669,6 +694,7 @@ elif menu == "📅 Calendário e Dashboard":
                 .cal-table th { padding: 8px; color: #555; font-weight: bold; border-bottom: 2px solid #ddd; }
                 .cal-table td { width: 14%; height: 75px; vertical-align: top; border: 1px solid #ccc; padding: 4px; position: relative; }
                 .cal-day-num { font-weight: bold; font-size: 13px; text-align: left; }
+                .cal-month-lbl { font-size: 9px; color: #6B7280; font-weight: normal; float: right; }
                 .cal-driver { margin-top: 10px; font-weight: 600; font-size: 13px; color: #1E3A8A; }
                 .cal-holiday { background-color: #FEE2E2; }
                 .holiday-label { font-size: 9px; color: #DC2626; display: block; margin-top: 2px; }
@@ -676,32 +702,32 @@ elif menu == "📅 Calendário e Dashboard":
             <table class="cal-table">
                 <tr>
             """
-            for d in dias_semana:
-                cor = "color: red;" if d in ["dom.", "sáb."] else ""
-                cal_html += f"<th style='{cor}'>{d}</th>"
+            for d_nome in dias_semana:
+                cor = "color: red;" if d_nome in ["dom.", "sáb."] else ""
+                cal_html += f"<th style='{cor}'>{d_nome}</th>"
             cal_html += "</tr>"
 
-            for semana in dias_mes:
+            for semana in semanas:
                 cal_html += "<tr>"
-                for dia in semana:
-                    if dia == 0:
+                for dia_dt in semana:
+                    if dia_dt is None:
                         cal_html += "<td></td>"
                     else:
-                        data_curr = datetime(ano_selecionado, m_sel, dia)
-                        data_str = data_curr.strftime("%Y-%m-%d")
+                        data_str = dia_dt.strftime("%Y-%m-%d")
 
-                        is_feriado = data_curr.date() in feriados_br
+                        is_feriado = dia_dt.date() in feriados_br
                         nome_feriado = (
-                            feriados_br.get(data_curr.date())
+                            feriados_br.get(dia_dt.date())
                             if is_feriado
                             else ""
                         )
                         bg_class = "cal-holiday" if is_feriado else ""
 
                         motorista_dia = motoristas_por_dia.get(data_str, "")
+                        label_mes = dia_dt.strftime("%b")
 
                         cal_html += f"<td class='{bg_class}'>"
-                        cal_html += f"<div class='cal-day-num'>{dia}</div>"
+                        cal_html += f"<div class='cal-day-num'>{dia_dt.day} <span class='cal-month-lbl'>{label_mes}</span></div>"
                         if is_feriado:
                             cal_html += f"<span class='holiday-label'>{nome_feriado}</span>"
                         if motorista_dia:
