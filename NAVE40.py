@@ -3,7 +3,7 @@ from datetime import datetime
 import subprocess
 import sys
 
-# Garante a instalação/importação do pacote holidays
+# Garante a instalação e importação do pacote holidays
 try:
     import holidays
 except ImportError:
@@ -37,6 +37,9 @@ URL_PLANILHA = (
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 
+# --------------------------------------------------------------------------
+# FUNÇÕES DE LEITURA E INTEGRAÇÃO COM O GOOGLE SHEETS
+# --------------------------------------------------------------------------
 def carregar_viagens():
     df = conn.read(spreadsheet=URL_PLANILHA, worksheet="viagens", ttl=0)
     if not df.empty:
@@ -51,13 +54,71 @@ def carregar_parametros():
 
 def carregar_pix():
     try:
-        df_pix = conn.read(spreadsheet=URL_PLANILHA, worksheet="pix", ttl=0)
+        # Lê a aba de chaves pix tratando todas as colunas como texto puro
+        df_pix = conn.read(
+            spreadsheet=URL_PLANILHA, worksheet="pix", dtype=str, ttl=0
+        )
         if not df_pix.empty:
             df_pix.columns = df_pix.columns.str.strip().str.lower()
+            if "chave_pix" in df_pix.columns:
+                # Trata e remove o .0 indesejado proveniente de números de telefone ou CPF
+                df_pix["chave_pix"] = (
+                    df_pix["chave_pix"]
+                    .astype(str)
+                    .str.replace(".0", "", regex=False)
+                    .str.strip()
+                )
         return df_pix
     except Exception:
-        # Retorna um DataFrame vazio caso a aba 'pix' ainda não tenha sido criada
         return pd.DataFrame(columns=["navegante", "chave_pix"])
+
+
+def calcular_picles(df_resumo_in, df_pix_in):
+    devedores = []
+    credores = []
+
+    for _, row in df_resumo_in.iterrows():
+        saldo = round(row["Fechamento"], 2)
+        if saldo < -0.01:
+            devedores.append([row["Navegante"], abs(saldo)])
+        elif saldo > 0.01:
+            credores.append([row["Navegante"], saldo])
+
+    pix_dict = {}
+    if not df_pix_in.empty and "navegante" in df_pix_in.columns:
+        pix_dict = df_pix_in.set_index("navegante")["chave_pix"].to_dict()
+
+    transacoes = []
+    i, j = 0, 0
+
+    while i < len(devedores) and j < len(credores):
+        nome_dev, val_dev = devedores[i]
+        nome_cred, val_cred = credores[j]
+
+        pagamento = min(val_dev, val_cred)
+
+        if pagamento > 0.01:
+            chave = str(pix_dict.get(nome_cred, "Não cadastrada")).replace(
+                ".0", ""
+            )
+            transacoes.append(
+                {
+                    "De (Quem Paga)": nome_dev,
+                    "Para (Quem Recebe)": nome_cred,
+                    "Valor (R$)": pagamento,
+                    "Chave Pix": chave,
+                }
+            )
+
+        devedores[i][1] -= pagamento
+        credores[j][1] -= pagamento
+
+        if devedores[i][1] <= 0.01:
+            i += 1
+        if credores[j][1] <= 0.01:
+            j += 1
+
+    return pd.DataFrame(transacoes)
 
 
 INTEGRANTES = ["Rogério", "Jonatas", "Gustavo", "Felipe", "Edgar"]
@@ -522,53 +583,6 @@ elif menu == "📅 Calendário e Dashboard":
             # --------------------------------------------------------------------------
             st.subheader("🥒 PICLES — Acerto de Contas (Menor Nº de PIX)")
 
-            def calcular_picles(df_resumo_in, df_pix_in):
-                devedores = []
-                credores = []
-
-                for _, row in df_resumo_in.iterrows():
-                    saldo = round(row["Fechamento"], 2)
-                    if saldo < -0.01:
-                        devedores.append([row["Navegante"], abs(saldo)])
-                    elif saldo > 0.01:
-                        credores.append([row["Navegante"], saldo])
-
-                pix_dict = {}
-                if not df_pix_in.empty and "navegante" in df_pix_in.columns:
-                    pix_dict = df_pix_in.set_index("navegante")[
-                        "chave_pix"
-                    ].to_dict()
-
-                transacoes = []
-                i, j = 0, 0
-
-                while i < len(devedores) and j < len(credores):
-                    nome_dev, val_dev = devedores[i]
-                    nome_cred, val_cred = credores[j]
-
-                    pagamento = min(val_dev, val_cred)
-
-                    if pagamento > 0.01:
-                        chave = pix_dict.get(nome_cred, "Não cadastrada")
-                        transacoes.append(
-                            {
-                                "De (Quem Paga)": nome_dev,
-                                "Para (Quem Recebe)": nome_cred,
-                                "Valor (R$)": pagamento,
-                                "Chave Pix": chave,
-                            }
-                        )
-
-                    devedores[i][1] -= pagamento
-                    credores[j][1] -= pagamento
-
-                    if devedores[i][1] <= 0.01:
-                        i += 1
-                    if credores[j][1] <= 0.01:
-                        j += 1
-
-                return pd.DataFrame(transacoes)
-
             df_pix = carregar_pix()
             df_picles = calcular_picles(df_resumo, df_pix)
 
@@ -577,28 +591,39 @@ elif menu == "📅 Calendário e Dashboard":
                     "🎉 Todas as contas estão zeradas! Ninguém precisa pagar ninguém."
                 )
             else:
-                col_p1, col_p2 = st.columns([3, 1])
+                df_picles["Valor Formatado"] = df_picles["Valor (R$)"].apply(
+                    lambda x: f"R$ {x:,.2f}"
+                )
 
-                with col_p1:
-                    st.dataframe(
-                        df_picles.style.format({"Valor (R$)": "R$ {:,.2f}"}),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
+                st.dataframe(
+                    df_picles[
+                        [
+                            "De (Quem Paga)",
+                            "Para (Quem Recebe)",
+                            "Valor Formatado",
+                            "Chave Pix",
+                        ]
+                    ],
+                    column_config={
+                        "De (Quem Paga)": st.column_config.TextColumn(
+                            "De (Quem Paga)"
+                        ),
+                        "Para (Quem Recebe)": st.column_config.TextColumn(
+                            "Para (Quem Recebe)"
+                        ),
+                        "Valor Formatado": st.column_config.TextColumn("Valor"),
+                        "Chave Pix": st.column_config.TextColumn(
+                            "Chave Pix (Clique para copiar)",
+                            help="Clique na célula e copie o valor para colar diretamente no app do banco",
+                        ),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
-                with col_p2:
-                    st.info(
-                        "💡 **Regra PICLES:** Esta tabela indica exatamente para quem e quanto transferir com o menor número de operações. Copie a chave Pix do destinatário para realizar o pagamento."
-                    )
-
-                st.write("📱 **Chaves para Cópia Rápida:**")
-                cols_btn = st.columns(len(df_picles))
-                for idx, row in df_picles.iterrows():
-                    with cols_btn[idx % len(cols_btn)]:
-                        st.code(f"{row['Chave Pix']}", language="text")
-                        st.caption(
-                            f"Pix para **{row['Para (Quem Recebe)']}** (R$ {row['Valor (R$)']:,.2f})"
-                        )
+                st.info(
+                    "💡 **Instruções:** As chaves Pix estão limpas (sem decimal `.0`). Basta tocar duas vezes na célula da chave Pix desejada para copiar diretamente para a sua área de transferência!"
+                )
 
         st.divider()
 
