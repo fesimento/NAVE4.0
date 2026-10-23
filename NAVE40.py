@@ -28,8 +28,9 @@ st.set_page_config(
 # --------------------------------------------------------------------------
 # LINK DA SUA PLANILHA NO GOOGLE SHEETS
 # --------------------------------------------------------------------------
+# Substitua o link abaixo pela URL exata da sua planilha do Google Sheets
 URL_PLANILHA = (
-    "https://docs.google.com/spreadsheets/d/1-NQnc7jpcGQ1g0RTu76XXj3h08NhU5QGmxoy_tT3QZk/edit?usp=drive_link/edit"
+    "https://docs.google.com/spreadsheets/d/SEU_ID_DA_PLANILHA/edit"
 )
 
 # CONEXÃO COM O GOOGLE SHEETS
@@ -46,6 +47,17 @@ def carregar_viagens():
 def carregar_parametros():
     df_p = conn.read(spreadsheet=URL_PLANILHA, worksheet="parametros", ttl=0)
     return df_p.iloc[0]
+
+
+def carregar_pix():
+    try:
+        df_pix = conn.read(spreadsheet=URL_PLANILHA, worksheet="pix", ttl=0)
+        if not df_pix.empty:
+            df_pix.columns = df_pix.columns.str.strip().str.lower()
+        return df_pix
+    except Exception:
+        # Retorna um DataFrame vazio caso a aba 'pix' ainda não tenha sido criada
+        return pd.DataFrame(columns=["navegante", "chave_pix"])
 
 
 INTEGRANTES = ["Rogério", "Jonatas", "Gustavo", "Felipe", "Edgar"]
@@ -505,7 +517,7 @@ elif menu == "📅 Calendário e Dashboard":
 
             st.divider()
 
-           # --------------------------------------------------------------------------
+            # --------------------------------------------------------------------------
             # TABELA PICLES - RESUMO DE QUEM PAGA PARA QUEM
             # --------------------------------------------------------------------------
             st.subheader("🥒 PICLES — Acerto de Contas (Menor Nº de PIX)")
